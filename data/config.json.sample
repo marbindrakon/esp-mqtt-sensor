@@ -1,0 +1,1 @@
+{"hostname": "UNCONFIGURED", "wifi_ssid": "", "wifi_password": "", "mqtt_broker": "", "mqtt_port": "1883", "water_enabled": 0, "ntp_server": "time.nist.gov", "data_topic": "sensors/unconfigured/data", "status_topic": "sensors/unconfigured/sensor_status", "command_topic": "sensors/unconfigured/command"}
