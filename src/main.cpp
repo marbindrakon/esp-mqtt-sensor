@@ -8,9 +8,13 @@
 #include <LittleFS.h>
 #include <stdlib.h>
 #include <SHA256.h>
+#include <version.h>
 
 DHTesp dht;
 
+#ifndef GIT_VERSION
+#define GIT_VERSION "v0.0.1-nogit"
+#endif
 // Callback function header
 void callback(char* topic, byte* payload, unsigned int length);
 
@@ -47,6 +51,7 @@ struct Data {
 
 struct Status {
   char config_hash[65];
+  char fw_version[32];
   bool water_enabled;
   char message[33];
   uint32_t chipid;
@@ -177,6 +182,7 @@ bool publish_status() {
     strlcpy(status.config_hash, configHashResult, 65);
     status.water_enabled = config.water_enabled;
     status.chipid = ESP.getChipId();
+    strlcpy(status.fw_version, GIT_VERSION, sizeof(status.fw_version));
     if (!unconfigured) {
       strlcpy(status.message, "alive", 65);
     } else {
@@ -187,6 +193,7 @@ bool publish_status() {
     statusJson["water_enabled"] = status.water_enabled;
     statusJson["message"] = status.message;
     statusJson["chip_id"] = status.chipid;
+    statusJson["fw_version"] = status.fw_version;
     char *statusJsonBuf = (char*) malloc(measureJson(statusJson) * sizeof(char) + 1);
     serializeJson(statusJson, statusJsonBuf, measureJson(statusJson) + 1);
     //Serial.println(config.status_topic);
@@ -245,6 +252,8 @@ void write_config() {
 
 void setup(void) {
   Serial.begin(115200);
+  Serial.print("Booting FW ");
+  Serial.println(GIT_VERSION);
   Serial.println("Mounting FS...");
 
   if (!LittleFS.begin()) {
