@@ -2,13 +2,14 @@
 #include <PubSubClient.h>
 #include <DHTesp.h>
 #include <ESP8266WiFi.h>
-#include <WiFiClient.h>
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <LittleFS.h>
 #include <stdlib.h>
 #include <SHA256.h>
 #include <version.h>
+#include <FW_Signing.h>
+#include<ESP8266httpUpdate.h>
 
 DHTesp dht;
 
@@ -98,6 +99,7 @@ bool loadConfig() {
   // buffer to be mutable. If you don't use ArduinoJson, you may as well
   // use configFile.readString instead.
   configFile.readBytes(buf.get(), size);
+  configFile.close();
   configHash.update(buf.get(), size);
   char hashBuf[65];
   configHash.finalize(hashBuf, 65);
@@ -138,6 +140,28 @@ bool loadConfig() {
   return true;
 }
 
+void write_config(Config new_config) {
+  File configFile = LittleFS.open("/config.json", "w");
+  if (!configFile) {
+    Serial.println("Failed to open config file");
+    return;
+  }
+  StaticJsonDocument<200> config_json;
+  config_json["wifi_ssid"] = new_config.wifi_ssid;
+  config_json["wifi_password"] = new_config.wifi_password;
+  config_json["mqtt_broker"] = new_config.mqtt_broker;
+  config_json["ntp_server"] = new_config.ntp_server;
+  config_json["data_topic"] = new_config.data_topic;
+  config_json["command_topic"] = new_config.command_topic;
+  config_json["status_topic"] = new_config.status_topic;
+
+  serializeJson(config_json, configFile);
+  configFile.close();
+  LittleFS.end();
+  client.disconnect();
+  ESP.reset();
+}
+
 // Callback function header
 void callback(char* topic, byte* payload, unsigned int length) {
   if (strcmp(topic, config.command_topic) != 0) {
@@ -160,20 +184,90 @@ void callback(char* topic, byte* payload, unsigned int length) {
   if (strcmp(command, "reset") == 0){
     Serial.println("Resetting from command");
     client.disconnect();
+    LittleFS.end();
     ESP.reset();
     return;
   }
   if (strcmp(command, "get_config") == 0) {
     Serial.println("Updatng configuration");
-    return;
+    Config newConfig;
+    if (input_json["config"].isNull()){
+      Serial.println("No new confiugration found");
+      return;
+    }
+    strlcpy(newConfig.wifi_ssid, input_json["config"]["wifi_ssid"], sizeof(newConfig.wifi_ssid));
+    strlcpy(newConfig.wifi_password, input_json["config"]["wifi_password"], sizeof(newConfig.wifi_password));
+    strlcpy(newConfig.mqtt_broker, input_json["config"]["mqtt_broker"], sizeof(newConfig.mqtt_broker));
+    strlcpy(newConfig.ntp_server, input_json["config"]["ntp_server"], sizeof(newConfig.mqtt_broker));
+    strlcpy(newConfig.data_topic, input_json["config"]["data_topic"], sizeof(newConfig.data_topic));
+    strlcpy(newConfig.command_topic, input_json["config"]["command_topic"], sizeof(newConfig.command_topic));
+    strlcpy(newConfig.status_topic, input_json["config"]["status_topic"], sizeof(newConfig.status_topic));
+    write_config(newConfig);
   }
   if (strcmp(command, "get_firmware") == 0) {
-    Serial.println("Beginning OTA from command");
-    return;
+    Serial.println("OTA Update Requested");
+    File updateFile = LittleFS.open("update", "w");
+    updateFile.write((const char*)input_json["update_uri"]);
+    updateFile.close();
+    delay(500);
+    LittleFS.end();
+    delay(500);
+    ESP.reset();
   }
   Serial.print("Invalid command: ");
   Serial.println(command);      
   return;
+}
+
+void ota_on_progress(int cur, int total){
+  Serial.printf("Update process at %d of %d bytes...\n", cur, total);
+}
+
+void ota_on_start(){
+  Serial.println("Starting update...");
+}
+
+void ota_on_finish(){
+  Serial.println("Update complete!");
+}
+
+void ota_on_error(int error){
+  Serial.printf("Error[%u]: ", error);
+}
+
+void do_ota_update(){
+    ESPhttpUpdate.setLedPin(LED_BUILTIN, LOW);
+    ESPhttpUpdate.onStart(ota_on_start);
+    ESPhttpUpdate.onEnd(ota_on_finish);
+    ESPhttpUpdate.onProgress(ota_on_progress);
+    ESPhttpUpdate.onError(ota_on_error);
+    Serial.println("Beginning OTA FW Update from update file");
+    Serial.print("OTA URI: ");
+    char updateUri[255];
+    File updateFile = LittleFS.open("update", "r");
+    updateFile.readBytes(updateUri, updateFile.size());
+    updateFile.close();
+    Serial.println(updateUri);
+    LittleFS.remove("update");
+    LittleFS.end();
+    t_httpUpdate_return ret = ESPhttpUpdate.update(wclient, updateUri);
+    switch(ret)
+    {
+      case HTTP_UPDATE_FAILED:
+        Serial.printf("[OTA]: HTTP_UPDATE_FAILD Error (%d): %s", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+        Serial.println();
+        break;
+
+      case HTTP_UPDATE_NO_UPDATES:
+        Serial.println("[OTA]: HTTP_UPDATE_NO_UPDATES");
+        break;
+
+      case HTTP_UPDATE_OK:
+        Serial.println("[OTA]: HTTP_UPDATE_OK");
+        break;
+    }
+    delay(10000);
+    ESP.reset();
 }
 
 bool publish_status() {
@@ -247,30 +341,25 @@ bool publish_data() {
   }
 }
 
-void write_config() {
-}
-
 void setup(void) {
   Serial.begin(115200);
   Serial.print("Booting FW ");
   Serial.println(GIT_VERSION);
+  Serial.print("FW Signing Key: ");
+  Serial.println(signing_pubkey);
   Serial.println("Mounting FS...");
 
   if (!LittleFS.begin()) {
     Serial.println("Failed to mount file system");
-    return;
+    ESP.reset();
   }
   if (!loadConfig()) {
     Serial.println("Failed to load JSON config!");
-    return;
+    ESP.reset();
   }
-
-  if (config.water_enabled == 1) {
-    pinMode(waterpin, INPUT);
-  }
-  dht.setup(dhtpin, DHTesp::DHT22);
-  client.setServer(config.mqtt_broker, config.mqtt_port);
-  client.setCallback(callback);
+  //
+  // Setup WiFi
+  //
   WiFi.softAPdisconnect (true);
   WiFi.mode(WIFI_STA);
   Serial.println(config.hostname);
@@ -290,7 +379,28 @@ void setup(void) {
   Serial.println(WiFi.localIP());
   Serial.print("Hostname: ");
   Serial.println(config.hostname);
-  LittleFS.end();
+
+  //
+  // Execute pending FW update
+  //
+
+  if (LittleFS.exists("update")) {
+    Serial.println("Updating firmware...");
+    do_ota_update(); // do_ota_update will reset the ESP
+  }
+
+  //
+  // Setup sensor(s)
+  //
+  if (config.water_enabled == 1) {
+    pinMode(waterpin, INPUT);
+  }
+  dht.setup(dhtpin, DHTesp::DHT22);
+  //
+  // Setup MQTT
+  //
+  client.setServer(config.mqtt_broker, config.mqtt_port);
+  client.setCallback(callback);
 }
 
 void loop(void) {
@@ -330,4 +440,5 @@ void loop(void) {
     lastSentMillis = millis();
   }
   client.loop();  
+
 }

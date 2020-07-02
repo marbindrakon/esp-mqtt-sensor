@@ -1,3 +1,5 @@
 .pio
 data/config.json
 include/version.h
+privkey.pem
+*.bin
