@@ -1,5 +1,6 @@
 .pio
 data/config.json
+data/certs.ar
 include/version.h
 privkey.pem
 *.bin
