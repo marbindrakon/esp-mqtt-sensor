@@ -9,18 +9,23 @@
 #include <SHA256.h>
 #include <version.h>
 #include <FW_Signing.h>
+#include <CertStoreBearSSL.h>
 #include<ESP8266httpUpdate.h>
+#include <ESP8266HTTPClient.h>
+#include <time.h>
 
 DHTesp dht;
 
 #ifndef GIT_VERSION
 #define GIT_VERSION "v0.0.1-nogit"
 #endif
-// Callback function header
+
+// MQTT callback function header
 void callback(char* topic, byte* payload, unsigned int length);
 
+WiFiClientSecure bear;
 WiFiClient wclient;
-PubSubClient client(wclient);
+PubSubClient client;
 
 const int dhtpin = 12;
 const int waterpin = 2;
@@ -42,6 +47,7 @@ struct Config {
   char data_topic[255];
   char status_topic[255];
   char command_topic[255];
+  bool mqtt_tls;
 };
 
 struct Data {
@@ -59,6 +65,27 @@ struct Status {
 };
 
 Config config;
+
+BearSSL::CertStore certStore;
+
+// Set time via NTP, as required for x.509 validation
+void setClock() {
+  configTime(3 * 3600, 0, config.ntp_server);
+
+  Serial.print("Waiting for NTP time sync: ");
+  time_t now = time(nullptr);
+  while (now < 8 * 3600 * 2) {
+    delay(500);
+    Serial.print(".");
+    now = time(nullptr);
+  }
+  Serial.println("");
+  struct tm timeinfo;
+  gmtime_r(&now, &timeinfo);
+  Serial.print("Current time: ");
+  Serial.print(asctime(&timeinfo));
+}
+
 
 void string2hexString(char* input, char* output)
 {
@@ -104,7 +131,7 @@ bool loadConfig() {
   char hashBuf[65];
   configHash.finalize(hashBuf, 65);
   string2hexString(hashBuf, configHashResult);
-  StaticJsonDocument<200> config_dict;
+  StaticJsonDocument<512> config_dict;
   auto error = deserializeJson(config_dict, buf.get());
   if (error) {
     Serial.println("Failed to parse config file");
@@ -113,6 +140,11 @@ bool loadConfig() {
   
   config.water_enabled = config_dict["water_enabled"];
   config.mqtt_port = config_dict["mqtt_port"];
+  if (config_dict["mqtt_tls"].isNull()){
+    config.mqtt_tls = false;
+  } else {
+    config.mqtt_tls = config_dict["mqtt_tls"];
+  }
   char *tempHostnameBuf = (char *) malloc(sizeof(config.hostname));
   strlcpy(tempHostnameBuf, config_dict["hostname"], sizeof(config.hostname));
   Serial.println("Moved hostname to temporary buffer");
@@ -140,26 +172,49 @@ bool loadConfig() {
   return true;
 }
 
-void write_config(Config new_config) {
-  File configFile = LittleFS.open("/config.json", "w");
-  if (!configFile) {
-    Serial.println("Failed to open config file");
-    return;
-  }
-  StaticJsonDocument<200> config_json;
-  config_json["wifi_ssid"] = new_config.wifi_ssid;
-  config_json["wifi_password"] = new_config.wifi_password;
-  config_json["mqtt_broker"] = new_config.mqtt_broker;
-  config_json["ntp_server"] = new_config.ntp_server;
-  config_json["data_topic"] = new_config.data_topic;
-  config_json["command_topic"] = new_config.command_topic;
-  config_json["status_topic"] = new_config.status_topic;
+bool startsWith(const char *pre, const char *str)
+{
+    size_t lenpre = strlen(pre),
+           lenstr = strlen(str);
+    return lenstr < lenpre ? false : memcmp(pre, str, lenpre) == 0;
+}
 
-  serializeJson(config_json, configFile);
-  configFile.close();
-  LittleFS.end();
-  client.disconnect();
-  ESP.reset();
+void write_config() {
+  File updateSourceFile = LittleFS.open("/config-update", "r");
+  char updateSource[255];
+  updateSourceFile.readBytes(updateSource, updateSourceFile.size());
+  updateSourceFile.close();
+  LittleFS.remove("/config-update");
+  Serial.println("Beginning OTA Config Update from URI");
+  Serial.print("OTA URI: ");
+  Serial.println(updateSource);
+  HTTPClient http;
+  if (startsWith("https", updateSource)){
+    http.begin(bear, updateSource);
+  } else {
+    http.begin(wclient, updateSource);
+  }
+  int respCode = http.GET();
+  if (respCode < 0){
+    Serial.println("HTTP client error");
+    Serial.printf("[HTTPS] GET... failed, error: %s\n", http.errorToString(respCode).c_str());
+    return;
+  } else {
+    File configFile = LittleFS.open("/config.json", "w+");
+    if (!configFile) {
+      Serial.println("Failed to open config file");
+      return;
+    }
+    http.writeToStream(&configFile);
+    delay(500);
+    configFile.seek(0);
+    while (configFile.available()) {
+      Serial.write(configFile.read());
+    }
+    delay(500);
+    configFile.close();
+    ESP.reset();
+  }
 }
 
 // Callback function header
@@ -168,7 +223,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     return;
   }
 
-  StaticJsonDocument<64> input_json;
+  StaticJsonDocument<512> input_json;
   DeserializationError err = deserializeJson(input_json, payload);
   if (err) {
     Serial.print(F("deserializeJson() failed: "));
@@ -183,26 +238,22 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   if (strcmp(command, "reset") == 0){
     Serial.println("Resetting from command");
-    client.disconnect();
-    LittleFS.end();
     ESP.reset();
     return;
   }
   if (strcmp(command, "get_config") == 0) {
     Serial.println("Updatng configuration");
-    Config newConfig;
-    if (input_json["config"].isNull()){
+    if (input_json["config_uri"].isNull()){
       Serial.println("No new confiugration found");
       return;
     }
-    strlcpy(newConfig.wifi_ssid, input_json["config"]["wifi_ssid"], sizeof(newConfig.wifi_ssid));
-    strlcpy(newConfig.wifi_password, input_json["config"]["wifi_password"], sizeof(newConfig.wifi_password));
-    strlcpy(newConfig.mqtt_broker, input_json["config"]["mqtt_broker"], sizeof(newConfig.mqtt_broker));
-    strlcpy(newConfig.ntp_server, input_json["config"]["ntp_server"], sizeof(newConfig.mqtt_broker));
-    strlcpy(newConfig.data_topic, input_json["config"]["data_topic"], sizeof(newConfig.data_topic));
-    strlcpy(newConfig.command_topic, input_json["config"]["command_topic"], sizeof(newConfig.command_topic));
-    strlcpy(newConfig.status_topic, input_json["config"]["status_topic"], sizeof(newConfig.status_topic));
-    write_config(newConfig);
+    File configUpdateFile = LittleFS.open("/config-update", "w");
+    configUpdateFile.write((const char*)input_json["config_uri"]);
+    configUpdateFile.close();
+    delay(500);
+    LittleFS.end();
+    delay(500);
+    ESP.reset();
   }
   if (strcmp(command, "get_firmware") == 0) {
     Serial.println("OTA Update Requested");
@@ -249,8 +300,17 @@ void do_ota_update(){
     updateFile.close();
     Serial.println(updateUri);
     LittleFS.remove("update");
+    t_httpUpdate_return ret = HTTP_UPDATE_FAILED;
+    if (startsWith("https", updateUri)) {
+      Serial.println("Using TLS client for update");
+      yield();
+      ret = ESPhttpUpdate.update(bear, updateUri);
+    } else {
+      Serial.println("Using HTTP client for update");
+      yield();
+      ret = ESPhttpUpdate.update(wclient, updateUri);
+    }
     LittleFS.end();
-    t_httpUpdate_return ret = ESPhttpUpdate.update(wclient, updateUri);
     switch(ret)
     {
       case HTTP_UPDATE_FAILED:
@@ -290,7 +350,6 @@ bool publish_status() {
     statusJson["fw_version"] = status.fw_version;
     char *statusJsonBuf = (char*) malloc(measureJson(statusJson) * sizeof(char) + 1);
     serializeJson(statusJson, statusJsonBuf, measureJson(statusJson) + 1);
-    //Serial.println(config.status_topic);
     if (!client.beginPublish(config.status_topic, measureJson(statusJson), true)){
       Serial.println("Failed to start status publish");
     }
@@ -333,7 +392,6 @@ bool publish_data() {
     if (!client.endPublish()){
       Serial.println("Failed to end data publish");
     }
-    //Serial.println(dataJsonBuf);
     free(dataJsonBuf);
     return 1;
   } else {
@@ -345,7 +403,7 @@ void setup(void) {
   Serial.begin(115200);
   Serial.print("Booting FW ");
   Serial.println(GIT_VERSION);
-  Serial.print("FW Signing Key: ");
+  Serial.println("FW Signing Key: ");
   Serial.println(signing_pubkey);
   Serial.println("Mounting FS...");
 
@@ -357,12 +415,12 @@ void setup(void) {
     Serial.println("Failed to load JSON config!");
     ESP.reset();
   }
+
   //
   // Setup WiFi
   //
   WiFi.softAPdisconnect (true);
   WiFi.mode(WIFI_STA);
-  Serial.println(config.hostname);
   WiFi.hostname(config.hostname);
   WiFi.begin(config.wifi_ssid, config.wifi_password);
   Serial.println("");
@@ -381,14 +439,27 @@ void setup(void) {
   Serial.println(config.hostname);
 
   //
-  // Execute pending FW update
+  // Setup BearSSL
   //
+  setClock();
+  int numCerts = certStore.initCertStore(LittleFS, PSTR("/certs.idx"), PSTR("/certs.ar"));
+  Serial.printf("Number of CA certs read: %d\n", numCerts);
+  if (numCerts == 0) {
+    Serial.printf("No certs found.\n");
+  }
+  bear.setCertStore(&certStore);
 
+  //
+  // Execute pending update
+  //
   if (LittleFS.exists("update")) {
     Serial.println("Updating firmware...");
     do_ota_update(); // do_ota_update will reset the ESP
   }
-
+  if (LittleFS.exists("config-update")) {
+    Serial.println("Updating config...");
+    write_config();
+  }
   //
   // Setup sensor(s)
   //
@@ -396,9 +467,16 @@ void setup(void) {
     pinMode(waterpin, INPUT);
   }
   dht.setup(dhtpin, DHTesp::DHT22);
+
   //
   // Setup MQTT
   //
+  if (config.mqtt_tls) {
+  client.setClient(bear);
+  } else {
+  client.setClient(wclient);
+  }
+  client.setBufferSize(512);
   client.setServer(config.mqtt_broker, config.mqtt_port);
   client.setCallback(callback);
 }
