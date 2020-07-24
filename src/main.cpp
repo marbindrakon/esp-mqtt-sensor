@@ -133,8 +133,8 @@ bool loadConfig() {
   configFile.readBytes(buf.get(), size);
   configFile.close();
   configHash.update(buf.get(), size);
-  char hashBuf[65];
-  configHash.finalize(hashBuf, 65);
+  char hashBuf[64];
+  configHash.finalize(hashBuf, 64);
   string2hexString(hashBuf, configHashResult);
   StaticJsonDocument<512> config_dict;
   auto error = deserializeJson(config_dict, buf.get());
