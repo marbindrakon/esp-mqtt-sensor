@@ -91,25 +91,6 @@ void setClock() {
   Serial.print(asctime(&timeinfo));
 }
 
-
-void string2hexString(char* input, char* output)
-{
-    int loop;
-    int i; 
-    
-    i=0;
-    loop=0;
-    
-    while(input[loop] != '\0')
-    {
-        sprintf((char*)(output+i),"%02X", input[loop]);
-        loop+=1;
-        i+=2;
-    }
-    //insert NULL at the end of the output string
-    output[i++] = '\0';
-}
-
 bool loadConfig() {
   Serial.println("Loading config from /config.json");
   File configFile = LittleFS.open("/config.json", "r");
@@ -133,9 +114,14 @@ bool loadConfig() {
   configFile.readBytes(buf.get(), size);
   configFile.close();
   configHash.update(buf.get(), size);
-  char hashBuf[64];
-  configHash.finalize(hashBuf, 64);
-  string2hexString(hashBuf, configHashResult);
+  char hashBuf[65];
+  configHash.finalize(hashBuf, 65);
+  int i;
+  for (i=0;i < 65; i++) {
+    sprintf(configHashResult + i*2, "%02X", hashBuf[i]);
+  }
+  Serial.print("Config Hash: ");
+  Serial.println(configHashResult);
   StaticJsonDocument<512> config_dict;
   auto error = deserializeJson(config_dict, buf.get());
   if (error) {
