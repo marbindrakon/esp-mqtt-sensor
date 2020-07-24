@@ -188,8 +188,8 @@ bool startsWith(const char *pre, const char *str)
 
 void write_config() {
   File updateSourceFile = LittleFS.open("/config-update", "r");
-  char updateSource[255];
-  updateSourceFile.readBytes(updateSource, updateSourceFile.size());
+  char updateSource[255] = {0};
+  updateSourceFile.readBytes(updateSource, 255);
   updateSourceFile.close();
   LittleFS.remove("/config-update");
   Serial.println("Beginning OTA Config Update from URI");
@@ -197,10 +197,13 @@ void write_config() {
   Serial.println(updateSource);
   HTTPClient http;
   if (startsWith("https", updateSource)){
+    Serial.println("Using BearSSL");
     http.begin(bear, updateSource);
   } else {
+    Serial.println("Using WifiClient");
     http.begin(wclient, updateSource);
   }
+  delay(500);
   int respCode = http.GET();
   if (respCode < 0){
     Serial.println("HTTP client error");
@@ -220,7 +223,7 @@ void write_config() {
     }
     delay(500);
     configFile.close();
-    ESP.reset();
+    ESP.restart();
   }
 }
 
@@ -245,7 +248,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   if (strcmp(command, "reset") == 0){
     Serial.println("Resetting from command");
-    ESP.reset();
+    ESP.restart();
     return;
   }
   if (strcmp(command, "get_config") == 0) {
@@ -255,22 +258,28 @@ void callback(char* topic, byte* payload, unsigned int length) {
       return;
     }
     File configUpdateFile = LittleFS.open("/config-update", "w");
-    configUpdateFile.write((const char*)input_json["config_uri"]);
+    char configUri[255] = {0};
+    strlcpy(configUri, input_json["config_uri"], 255);
+    configUpdateFile.write(configUri, 255);
+    delay(500);
     configUpdateFile.close();
     delay(500);
     LittleFS.end();
-    delay(500);
-    ESP.reset();
+    delay(1000);
+    ESP.restart();
   }
   if (strcmp(command, "get_firmware") == 0) {
     Serial.println("OTA Update Requested");
     File updateFile = LittleFS.open("update", "w");
-    updateFile.write((const char*)input_json["update_uri"]);
+    char updateUri[255] = {0};
+    strlcpy(updateUri, input_json["update_uri"], 255);
+    updateFile.write(updateUri, 255);
+    delay(500);
     updateFile.close();
     delay(500);
     LittleFS.end();
-    delay(500);
-    ESP.reset();
+    delay(1000);
+    ESP.restart();
   }
   Serial.print("Invalid command: ");
   Serial.println(command);      
@@ -300,11 +309,11 @@ void do_ota_update(){
     ESPhttpUpdate.onProgress(ota_on_progress);
     ESPhttpUpdate.onError(ota_on_error);
     Serial.println("Beginning OTA FW Update from update file");
-    Serial.print("OTA URI: ");
-    char updateUri[255];
     File updateFile = LittleFS.open("update", "r");
-    updateFile.readBytes(updateUri, updateFile.size());
+    char updateUri[255] = {0};
+    updateFile.readBytes(updateUri, 255);
     updateFile.close();
+    Serial.print("OTA URI: ");
     Serial.println(updateUri);
     LittleFS.remove("update");
     t_httpUpdate_return ret = HTTP_UPDATE_FAILED;
@@ -334,7 +343,7 @@ void do_ota_update(){
         break;
     }
     delay(10000);
-    ESP.reset();
+    ESP.restart();
 }
 
 bool publish_status() {
@@ -422,11 +431,11 @@ void setup(void) {
 
   if (!LittleFS.begin()) {
     Serial.println("Failed to mount file system");
-    ESP.reset();
+    ESP.restart();
   }
   if (!loadConfig()) {
     Serial.println("Failed to load JSON config!");
-    ESP.reset();
+    ESP.restart();
   }
 
   //
