@@ -47,8 +47,8 @@ struct Config {
   char data_topic[255];
   char status_topic[255];
   char command_topic[255];
-//  char sensor_name[33];
-//  char zone[33];
+  char sensor_name[33];
+  char zone[33];
   bool mqtt_tls;
 };
 
@@ -63,8 +63,8 @@ struct Status {
   char fw_version[32];
   bool water_enabled;
   char message[33];
-//  char sensor_name[33];
-//  char zone[33];
+  char sensor_name[33];
+  char zone[33];
   char command_topic[255];
   uint32_t chipid;
 };
@@ -159,8 +159,8 @@ bool loadConfig() {
   strlcpy(config.data_topic, config_dict["data_topic"], sizeof(config.data_topic));
   strlcpy(config.command_topic, config_dict["command_topic"], sizeof(config.command_topic));
   strlcpy(config.status_topic, config_dict["status_topic"], sizeof(config.status_topic));
-  //strlcpy(config.sensor_name, config_dict["sensor_name"], sizeof(config.sensor_name));
-  //strlcpy(config.zone, config_dict["zone"], sizeof(config.zone));
+  strlcpy(config.sensor_name, config_dict["sensor_name"], sizeof(config.sensor_name));
+  strlcpy(config.zone, config_dict["zone"], sizeof(config.zone));
   Serial.println("Loaded config!");
   return true;
 }
@@ -339,8 +339,8 @@ bool publish_status() {
     status.water_enabled = config.water_enabled;
     status.chipid = ESP.getChipId();
     strlcpy(status.command_topic, config.command_topic, sizeof(status.command_topic));
-//    status.sensor_name = config.sensor_name;
-//    status.zone = config.zone;
+    strlcpy(status.sensor_name, config.sensor_name, sizeof(status.sensor_name));
+    strlcpy(status.zone, config.zone, sizeof(status.zone));
     strlcpy(status.fw_version, GIT_VERSION, sizeof(status.fw_version));
     if (!unconfigured) {
       strlcpy(status.message, "alive", 65);
@@ -354,8 +354,8 @@ bool publish_status() {
     statusJson["chip_id"] = status.chipid;
     statusJson["fw_version"] = status.fw_version;
     statusJson["command_topic"] = status.command_topic;
-//    statusJson["sensor_name"] = status.sensor_name;
-//    statusJson["zone"] = status.zone;
+    statusJson["sensor_name"] = status.sensor_name;
+    statusJson["zone"] = status.zone;
     char *statusJsonBuf = (char*) malloc(measureJson(statusJson) * sizeof(char) + 1);
     serializeJson(statusJson, statusJsonBuf, measureJson(statusJson) + 1);
     if (!client.beginPublish(config.status_topic, measureJson(statusJson), true)){
