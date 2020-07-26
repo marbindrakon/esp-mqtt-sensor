@@ -53,7 +53,7 @@ struct Config {
 };
 
 struct Data {
-  bool water_state;
+  uint32_t chipid;
   float temperature;
   float humidity;
 };
@@ -379,16 +379,11 @@ bool publish_data() {
   }
   if (millis() > lastSentMillis + 5000){
     Data data;
-    if (config.water_enabled) {
-      data.water_state = !digitalRead(waterpin);
-    } else {
-      data.water_state = false;
-    }
     data.temperature = dht.getTemperature();
     data.humidity = dht.getHumidity();
-  
+    data.chipid = ESP.getChipId(); 
     StaticJsonDocument<85> dataJson;
-    dataJson["water_state"] = data.water_state;
+    dataJson["chip_id"] = data.chipid;
     dataJson["temperature"] = data.temperature;
     dataJson["humidity"] = data.humidity;
     char *dataJsonBuf = (char*) malloc(measureJson(dataJson) * sizeof(char) + 1);
