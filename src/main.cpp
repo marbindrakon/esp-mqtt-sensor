@@ -347,7 +347,7 @@ bool publish_status() {
     } else {
       strlcpy(status.message, "unconfigured", 65);
     }
-    StaticJsonDocument<255> statusJson;
+    StaticJsonDocument<512> statusJson;
     statusJson["config_hash"] = status.config_hash;
     statusJson["water_enabled"] = status.water_enabled;
     statusJson["message"] = status.message;
