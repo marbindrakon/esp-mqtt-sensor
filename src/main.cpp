@@ -49,6 +49,7 @@ struct Config {
   char command_topic[255];
   char sensor_name[33];
   char zone[33];
+  char area[33];
   bool mqtt_tls;
 };
 
@@ -65,6 +66,7 @@ struct Status {
   char message[33];
   char sensor_name[33];
   char zone[33];
+  char area[33];
   char command_topic[255];
   uint32_t chipid;
 };
@@ -161,6 +163,7 @@ bool loadConfig() {
   strlcpy(config.status_topic, config_dict["status_topic"], sizeof(config.status_topic));
   strlcpy(config.sensor_name, config_dict["sensor_name"], sizeof(config.sensor_name));
   strlcpy(config.zone, config_dict["zone"], sizeof(config.zone));
+  strlcpy(config.area, config_dict["area"], sizeof(config.area));
   Serial.println("Loaded config!");
   return true;
 }
@@ -341,6 +344,7 @@ bool publish_status() {
     strlcpy(status.command_topic, config.command_topic, sizeof(status.command_topic));
     strlcpy(status.sensor_name, config.sensor_name, sizeof(status.sensor_name));
     strlcpy(status.zone, config.zone, sizeof(status.zone));
+    strlcpy(status.area, config.area, sizeof(status.area));
     strlcpy(status.fw_version, GIT_VERSION, sizeof(status.fw_version));
     if (!unconfigured) {
       strlcpy(status.message, "alive", 65);
@@ -356,6 +360,7 @@ bool publish_status() {
     statusJson["command_topic"] = status.command_topic;
     statusJson["sensor_name"] = status.sensor_name;
     statusJson["zone"] = status.zone;
+    statusJson["area"] = status.area;
     char *statusJsonBuf = (char*) malloc(measureJson(statusJson) * sizeof(char) + 1);
     serializeJson(statusJson, statusJsonBuf, measureJson(statusJson) + 1);
     if (!client.beginPublish(config.status_topic, measureJson(statusJson), true)){
