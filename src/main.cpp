@@ -492,18 +492,7 @@ void setup(void) {
 void loop(void) {
   if (WiFi.status() == WL_CONNECTED) {
     if (!client.connected()) {
-      Status willStatus;
-      strlcpy(willStatus.config_hash, configHashResult, 65);
-      willStatus.water_enabled = config.water_enabled;
-      strlcpy(willStatus.message, "dead", 65);
-      StaticJsonDocument<200> willStatusJson;
-      willStatusJson["config_hash"] = willStatus.config_hash;
-      willStatusJson["water_enabled"] = willStatus.water_enabled;
-      willStatusJson["message"] = willStatus.message;
-      char willStatusJsonBuf[200];
-	    serializeJson(willStatusJson, willStatusJsonBuf);
       Serial.println("Connecting to MQTT server");
-      //if (client.connect(config.hostname, config.status_topic, 1, true, willStatusJsonBuf))
       if (client.connect(config.hostname))
       {
         Serial.println(strcat("Connected to MQTT server at ", config.mqtt_broker));
