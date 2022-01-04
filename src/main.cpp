@@ -31,6 +31,7 @@ const int dhtpin = 12;
 const int waterpin = 2;
 long lastSentMillis = 0;
 bool unconfigured = 1;
+const int ledPin = 5; 
 
 SHA256 configHash;
 
@@ -50,6 +51,7 @@ struct Config {
   char sensor_name[33];
   char zone[33];
   char area[33];
+  bool led_enabled;
   bool mqtt_tls;
 };
 
@@ -138,6 +140,12 @@ bool loadConfig() {
   } else {
     config.mqtt_tls = config_dict["mqtt_tls"];
   }
+  if (config_dict["led_enabled"].isNull()){
+    config.led_enabled = false;
+  } else {
+    config.led_enabled = config_dict["led_enabled"];
+  }
+
   char *tempHostnameBuf = (char *) malloc(sizeof(config.hostname));
   strlcpy(tempHostnameBuf, config_dict["hostname"], sizeof(config.hostname));
   Serial.println("Moved hostname to temporary buffer");
@@ -473,6 +481,10 @@ void setup(void) {
   //
   if (config.water_enabled == 1) {
     pinMode(waterpin, INPUT);
+  }
+  if (config.led_enabled == 1) {
+    pinMode(ledPin, OUTPUT);
+    digitalWrite(ledPin, HIGH);
   }
   dht.setup(dhtpin, DHTesp::DHT22);
 
