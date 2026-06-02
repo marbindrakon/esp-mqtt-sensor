@@ -29,9 +29,16 @@ PubSubClient client;
 
 const int dhtpin = 12;
 const int waterpin = 2;
-long lastSentMillis = 0;
+unsigned long lastSentMillis = 0;
+unsigned long lastOkMs = 0;
 bool unconfigured = 1;
-const int ledPin = 5; 
+const int ledPin = 5;
+
+// Resilience tuning
+#define PUBLISH_INTERVAL_MS 5000UL
+#define MQTT_RETRY_INTERVAL_MS 5000UL
+#define WIFI_RECONNECT_TIMEOUT_MS 60000UL
+#define STALL_REBOOT_MS 180000UL
 
 SHA256 configHash;
 
@@ -344,7 +351,7 @@ void do_ota_update(){
 }
 
 bool publish_status() {
-  if (millis() > lastSentMillis + 5000){
+  if (millis() - lastSentMillis >= PUBLISH_INTERVAL_MS){
     Status status;
     strlcpy(status.config_hash, configHashResult, 65);
     status.water_enabled = config.water_enabled;
@@ -390,7 +397,7 @@ bool publish_data() {
   if (unconfigured) {
     return 0;
   }
-  if (millis() > lastSentMillis + 5000){
+  if (millis() - lastSentMillis >= PUBLISH_INTERVAL_MS){
     Data data;
     data.temperature = dht.getTemperature();
     data.humidity = dht.getHumidity();
@@ -437,6 +444,8 @@ void setup(void) {
   //
   WiFi.softAPdisconnect (true);
   WiFi.mode(WIFI_STA);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
   WiFi.hostname(config.hostname);
   WiFi.begin(config.wifi_ssid, config.wifi_password);
   Serial.println("");
@@ -497,25 +506,60 @@ void setup(void) {
   client.setClient(wclient);
   }
   client.setBufferSize(512);
+  client.setSocketTimeout(5);
   client.setServer(config.mqtt_broker, config.mqtt_port);
   client.setCallback(callback);
+
+  // Start the stall-watchdog window fresh after boot
+  lastOkMs = millis();
 }
 
 void loop(void) {
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!client.connected()) {
-      Serial.println("Connecting to MQTT server");
-      if (client.connect(config.hostname))
-      {
-        Serial.println(strcat("Connected to MQTT server at ", config.mqtt_broker));
-        client.subscribe(config.command_topic);
-
-      } else {
-        Serial.println("Could not connect to MQTT server");   
-      }
+  //
+  // WiFi resilience: actively reconnect, reboot if down too long (#1)
+  //
+  static unsigned long wifiDownSince = 0;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiDownSince == 0) {
+      wifiDownSince = millis();
+      Serial.println("WiFi disconnected, attempting to reconnect");
+      WiFi.reconnect();
     }
-
+    if (millis() - wifiDownSince > WIFI_RECONNECT_TIMEOUT_MS) {
+      Serial.println("WiFi down too long, restarting");
+      delay(50);
+      ESP.restart();
+    }
+    return;
   }
+  wifiDownSince = 0;
+
+  //
+  // MQTT connect: throttled retry with a unique client id (#6)
+  //
+  static unsigned long lastMqttTry = 0;
+  if (!client.connected() && (lastMqttTry == 0 || millis() - lastMqttTry >= MQTT_RETRY_INTERVAL_MS)) {
+    lastMqttTry = millis();
+    Serial.println("Connecting to MQTT server");
+    String clientId = String(config.hostname) + "-" + String(ESP.getChipId(), HEX);
+    if (client.connect(clientId.c_str())) {
+      Serial.print("Connected to MQTT server at ");
+      Serial.println(config.mqtt_broker);
+      client.subscribe(config.command_topic);
+    } else {
+      Serial.println("Could not connect to MQTT server");
+    }
+  }
+
+  //
+  // Stall watchdog: reboot if nothing has published while connected recently (#2)
+  //
+  if (millis() - lastOkMs > STALL_REBOOT_MS) {
+    Serial.println("Stall watchdog: no successful publish, restarting");
+    delay(50);
+    ESP.restart();
+  }
+
   int published = 0;
   if (publish_data()){
     published++;
@@ -525,7 +569,9 @@ void loop(void) {
   }
   if (published != 0){
     lastSentMillis = millis();
+    if (client.connected()){
+      lastOkMs = millis();
+    }
   }
-  client.loop();  
-
+  client.loop();
 }
